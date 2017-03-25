@@ -1,0 +1,246 @@
+#' ---
+#' title: "Things that can go wrong"
+#' author: "MATH 66356"
+#' date: "`r format(Sys.time(), '%B %d, %Y at %H:%M')`"
+#' output:
+#'    pdf_document:
+#'      toc: true
+#'      toc_depth: 6
+#' ---
+#' 
+#' To run these examples it is assumed that you have already successfully
+#' installed STAN and R packages associated with it.   
+#' See [RStan Getting Started](https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started).
+#+ include=FALSE,
+knitr::opts_chunk$set(comment = "   ", 
+                      eval = TRUE,
+                      prompt = FALSE, 
+                      warning = TRUE,
+                      message = TRUE, 
+                      error = TRUE, 
+                      tidy = FALSE, 
+                      cache = FALSE)
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+ex <- knitr::knit_exit
+verbose <- FALSE
+
+library(magrittr)
+library(spida2)
+library(lattice)
+library(latticeExtra)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+set.seed(597083263)
+#' 
+#' # Summary of asymptotics
+#' 
+#' As \(n \to \infty \), the posterior distribution, 
+#' $p(\theta | y)$ is well behaved under general conditions:
+#' 
+#' 1. $\theta_{true}$ is in the interior of  \[\Omega  \subset {\mathbb{R}^p}\]$ 
+#'    where $\Omega$ is the set of possible values of $\theta$.
+#' 2. The model for an individual observation, $p(y_i|\theta)$ is the same
+#'    for each $i$. Although this is sufficient, it is rarely exactly
+#'    satisfied in practice. There are better statements of this condition.
+#' 3. $p(y|\theta)$ is continuous in $\theta$
+#' 
+#' If the model is valid, i.e. the true distribution of $y$
+#' is in the model given by $p(y |\theta_{true})$ and if the
+#' proper prior has positive density at $\theta_{true}$ then
+#' the posterior mode $\hat{\theta}$ converges in distribution
+#' to $\theta_{true}$ and is asymptotically normal with
+#' $\theta_{true}$ and variance $I(\hat{\theta})^{-1}$ which
+#' itself converges to $I(\theta_{true})^{-1}$.
+#' 
+#' So, for large $n$, Bayesian and frequentist approaches
+#' coincide and the posterior distribution can be summarized
+#' by the posterior mean and variance. 
+#' 
+#' # Common examples where things fail
+#' 
+#' Largely taken from pp 89--91 of BDA3.
+#' 
+#' ## Underidentified models and nonidentified parameters
+#' 
+#' Consider estimating the distribution of treatment effects
+#' with a randomized experiment.
+#' 
+#' Suppose the response of subject $i$ to treatment $t = 1,2$ is
+#' modeled as:
+#' $$ y_{it} = \phi_{it} + \epsilon_{it} $$                                       
+#' where $\phi_{it}$ is the expected response of subject $i$
+#' to treatment $t$.  The expected effect of treatment
+#' on subject $i$ is $\delta_{i} = \phi_{i2} - \phi_{i1}$
+#' and $\epsilon_{it} \sim N(0, \sigma_\epsilon )$ is the
+#' variability in response under fixed conditions.
+#' 
+#' In a randomized experiment in which each subject is
+#' observed under only one of treatments 1 or 2, we can estimate
+#' the expected value of $\delta_i$, the mean treatment effect, but 
+#' we are very limited in the estimation of its distribution.
+#' Thus, although we can tell a subject the 'expected benefit'
+#' of a treament, we cannot readily estimate the probability
+#' that one treatment will be superior to the other.
+#' 
+#' ## Number of parameters increasing with sample size
+#' 
+#' For example if, in hierarchical data, the number of clusters
+#' increases -- thus increasing $n$ -- but the cluster size
+#' has a maximum, then the larger $n$ will not result is an
+#' asymptotically vanishing standard deviation for the estimate
+#' of a cluster mean if the number of observations within that
+#' cluster is fixed.
+#' 
+#' ## Aliasing
+#' 
+#' Lack of identifiability can happen in situation that
+#' may be difficult to see. For example in a regression, three
+#' predictors could be collinear although any pair are 
+#' not collinear. The regression as a whole will not be 
+#' estimable although, pairwise, the predictors are not collinear.
+#' 
+#' ## Unbounded likelihoods
+#' 
+#' This is not uncommon in hierarchical models if the variability
+#' between clusters is small relative to what it would be 
+#' expected to be compared with the within cluster variability.
+#' 
+#' Consider the eight school example from BDA3.
+#' 
+# Original from BDA3
+schools_dat <- list(J = 8, 
+                    y = c(28,  8, -3,  7, -1,  1, 18, 12),
+                    sigma = c(15, 10, 16, 11,  9, 11, 10, 18))
+#' 
+#' The marginal variance of the y's obeys:
+#' 
+#' $$var(y) = E(var(y_i|i)) + var(E(y_i|i)) = \frac{\sum{\sigma_i^2}}{J} + \tau^2$$
+#'
+#' In this case the observed variance of y is 
+#' `r round(var(schools_dat$y),2)`
+#' and the mean variance of the individual y's is
+#' `r round(mean(schools_dat$sigma^2))`.
+#' 
+#' If the variance of y's were less that the mean of the
+#' sigma squared, the y's would be said to be _underdispersed_.
+#' An extreme case would suggest that the y's could not have
+#' been generated by the process that is modeled.
+#' 
+#' Using mixed models to fit highly underdispersed data
+#' usually results in convergence problems because the
+#' likelihood is unbounded as the between cluster variance,
+#' $\tau^2$ approaches 0.
+#' 
+#' We can use the 'eight schools' data to explore what happens
+#' with HMC by increasing 'sigma' in the data to make the 
+#' data underdispersed. Surprisingly, the posterior, in this
+#' case, does not produce a large number of divergent transitions
+#' associated with small estimated values of $\tau$.  Curiously,
+#' with considerable underdispersion, the posterior for $\tau$
+#' seems to suggest larger values.
+#' 
+#' This seems to suggest that fitting models that 'don't make
+#' sense' can produce results that make even less sense.  The
+#' lesson is that one must try to understand the data and the 
+#' processes generating it well and not rely on advanced 
+#' modeling methods to correct, or even provide a warning,
+#' when the model and data don't accord.
+#' 
+#' Let's add two types so we can estimate the difference
+#' between school types.
+#' 
+schools_dat$type <- c(1,1,1,1,2,2,2,2)
+
+code <- ('
+  data{
+    int J;
+    real y[J];
+    real sigma[J];
+    int type[J];
+  }
+  parameters{
+    real mu[2];
+    real u[J];
+    real log_tau;
+  }
+  transformed parameters{
+    real delta;
+    real tau;
+    delta = mu[2] - mu[1];
+    tau = exp(log_tau);
+  }
+  model{
+    for(j in 1:J) u[j] ~ normal(0,tau);
+    for(j in 1:J) y[j] ~ normal(mu[type[j]]+u[j],sigma[j]);
+  }
+')
+system.time(
+  fit <- stan(model_code = code, 
+              data = schools_dat, 
+              iter = 2012, 
+              chains = 4,
+              verbose = verbose)
+)
+pairs(fit,pars=c('mu','delta','tau'))
+#'
+#' 
+#' 
+data_small_sigma <- schools_dat
+data_small_sigma$sigma <- schools_dat$sigma*0.2
+system.time(
+  fit2 <- stan(model_code = code, 
+              data = data_small_sigma, 
+              iter = 2012, 
+              chains = 4, 
+              verbose = verbose)
+)
+fit2
+pairs(fit2,pars=c('mu','delta','tau'))
+#'
+#' with a large sigma:
+data_large_sigma <- schools_dat
+data_large_sigma$sigma <- schools_dat$sigma*5
+system.time(
+  fit3 <- stan(model_code = code, 
+               data = data_large_sigma, 
+               iter = 2012, 
+               chains = 4, 
+               verbose = verbose)
+)
+fit3
+pairs(fit3,pars=c('mu','delta','tau'))
+
+dd <- lapply(list(fit,fit2,fit3), rstan::extract) %>% lapply(as.data.frame) 
+taus <- sapply(dd, function(d) d$tau)
+length(taus)/3
+dp <- data.frame(tau=c(taus), model = rep(c('orig','small','large'),
+                                       each = length(taus)/3))
+head(dp)
+densityplot(~tau | model, dp, layout = c(1,3))
+densityplot(~log(tau) | model, dp, layout = c(1,3))
+#'
+#' # Improper posterior distribution
+#' 
+#' In this case, MCMC will just wander around the entire space
+#' without giving consistent results from run to run.
+#' 
+#' An improper posterior can only happen with an improper prior.
+#' A proper prior will never result in an improper posterior.
+#' 
+#' # Prior distributions that exclude the point of convergence
+#' 
+#' # Convergence to the edge of the parameter space
+#' 
+#' # Tails of the distribution
+#' 
+#' A common example would be a ratio of normals, or a ratio of 
+#' variance where the denominator has one degree of freedom.
+#' Any ratio where the denominator does not have zero density
+#' at the origin will produce a thick-tailed distribution like
+#' the Cauchy distribution. The distribution has neither mean 
+#' nor variance and attempting to summarize it with a mean and
+#' standard deviation will invariably lead to an underestimate
+#' of the probability of outcomes in the extreme tails, a 
+#' serious issue if a parameter is indicator of risk.
+

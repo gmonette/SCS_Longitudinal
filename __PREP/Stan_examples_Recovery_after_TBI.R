@@ -16,13 +16,12 @@ knitr::opts_knit$set()
 knitr::opts_chunk$get(cache = TRUE, eval = FALSE)
 #'
 #' 
-TODO ============= Add random deficit
 #' 
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
-windowsFonts(Arial=windowsFont("TT Arial")) 
-
+# windowsFonts(Arial=windowsFont("TT Arial")) 
+interactive <- FALSE
 library(spida2)
 library(magrittr, pos = 1000) # so it won't mask 'extract' in rstan
 library(car)
@@ -38,67 +37,49 @@ dd <-iq
 
 (p <- xyplot(piq ~ dayspc | sex, dd, groups = id, type = 'b'))
 update(p, xlim = c(0,4000))
-ids <- numeric(0)
-# can repeat:
-trellis.focus()
-ids <- c(ids, panel.identify(labels=dd$id))
-# end
-trellis.unfocus()
-ids
-iq[ids,] %>% sortdf(~dcoma+dayspc)
+if(interactive) {
+  rows <- numeric(0)
+  # can repeat:
+  trellis.focus()
+  rows <- c(rows, panel.identify(labels=dd$id))
+  # end
+  trellis.unfocus()
+  rows
+  save(rows, file = 'rows.rda')
+}
+load('rows.rda', verbose = T)
+iq[rows,] %>% sortdf(~dcoma+dayspc)
 # id = 2600 retested 4 days apart
 # Create a long file wrt iq
 dd$iq__verbal <- dd$viq
 dd$iq__perf <- dd$piq
 dl <- tolong(dd, sep = "__", idvar = 'row', timevar = 'test')
 head(dl)
-library(p3d)
-Init3d()
-dd$dcoma.cat <- cut(dd$dcoma, c(-1,2,5,10,20,50,Inf))
-Plot3d( viq ~ piq + log(dayspc) |
-          dcoma.cat, dd, groups = id,
-        col = heat.colors(6))
-Plot3d( viq ~ log(dcoma+2) + log(dayspc) |
-          dcoma.cat, dd, groups = id,
-        col = heat.colors(6))
-Plot3d( piq ~ log(dcoma+2) + log(dayspc) |
-          dcoma.cat, dd, groups = id,
-        col = heat.colors(12)[1:6])
-fg()
-Id3d()
+if(interactive){
+  library(p3d)
+  Init3d()
+  dd$dcoma.cat <- cut(dd$dcoma, c(-1,2,5,10,20,50,Inf))
+  Plot3d( viq ~ piq + log(dayspc) |
+            dcoma.cat, dd, groups = id,
+          col = heat.colors(6))
+  Plot3d( viq ~ log(dcoma+2) + log(dayspc) |
+            dcoma.cat, dd, groups = id,
+          col = heat.colors(6))
+  Plot3d( piq ~ log(dcoma+2) + log(dayspc) |
+            dcoma.cat, dd, groups = id,
+          col = heat.colors(12)[1:6])
+  fg()
+  Id3d()
+}
 
-asymp_model <- "
-data {
-  int N;
-  int J;
-  vector[N] y;
-  vector[N] time;
-  vector[N] coma;
-  int id[N];
-}
-transformed data{
-  real ln2;
-  ln2 = log(2);
-}
-parameters {
-  real hrt;
-  real asymp;
-  real bcoma;
-  real init_def;
-  vector[J] u;
-  real <lower=0> sigma;
-  real <lower=0> sigma_u;
-}
-model {
-  u ~ normal(0,sigma_u);
-  y ~ normal(asymp + u[id] + bcoma * coma + init_def * exp(-time/(hrt*ln2)), sigma);
-}
-"
+# Stan program:
+cat(file="asymp_model.stan")
 
 system.time(
-asymp_model_dso <- stan_model(model_code = asymp_model,
-                              model_name = 'asymptotic model')
+asymp_model_dso <- stan_model("asymp_model.stan")
 )
+
+# Prepare data
 
 names(dd)
 dat <- list(
@@ -110,8 +91,9 @@ dat <- list(
   coma = sqrt(dd$dcoma)
 )
 
-mod <- sampling(asymp_model_dso, dat, chains = 6, iter = 2000, seed = 789723)
-
+mod <- sampling(asymp_model_dso, dat, chains = 4, iter = 2000, 
+                seed = 789723)
+# Note: chains and iter are defaults
 traceplot(mod)
 library(shinystan)
 names(mod)
@@ -119,24 +101,26 @@ pars <- grepv('^u', names(mod), invert = T)
 pars
 traceplot(mod, pars = pars)
 pairs(mod, pars = pars)
+
 mod_sso <- launch_shinystan(mod)
 
-
-# can do most of this in shiny:
-mod_df <- as.data.frame(extract(mod, permuted = F, pars = pars))
-head(mod_df)
-dim(mod_df)
-names(mod_df)
-mod_dl <- tolong(mod_df, sep = '.', reverse = T, timevar = 'chain')
-head(mod_dl)
-library(p3d)
-Init3d()
-Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl)
-Axes3d()
-Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl, groups = chain)
-tab(mod_dl, ~ time)
-Plot3d(hrt ~ asymp + init_def | chain, mod_dl)
-Axes3d()
+if(FALSE) {
+  # can do most of this in shiny:
+  mod_df <- as.data.frame(extract(mod, permuted = F, pars = pars))
+  head(mod_df)
+  dim(mod_df)
+  names(mod_df)
+  mod_dl <- tolong(mod_df, sep = '.', reverse = T, timevar = 'chain')
+  head(mod_dl)
+  library(p3d)
+  Init3d()
+  Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl)
+  Axes3d()
+  Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl, groups = chain)
+  tab(mod_dl, ~ time)
+  Plot3d(hrt ~ asymp + init_def | chain, mod_dl)
+  Axes3d()
+}
 #'
 #'  
 #'  Test square root for dcoma
@@ -347,12 +331,12 @@ parameters {
   cov_matrix[2] Sigma_u;
 }
 model {
- vector[2] eta[N];
+ vector[2] eta;
  for(j in 1:J) u[j] ~ multi_normal(zero, Sigma_u);
  for(n in 1:N) {
-    eta[n,1] =   asymp[1] + u[id[n],1] + bcoma[1] * tcoma[n] + init_def[1] * exp(-time[n]/(hrt[1]*ln2));
-    eta[n,2] =   asymp[2] + u[id[n],2] + bcoma[2] * tcoma[n] + init_def[2] * exp(-time[n]/(hrt[2]*ln2));
-    iq[n,] ~ multi_normal(eta[n], Sigma);
+    eta[1] =   asymp[1] + u[id[n],1] + bcoma[1] * tcoma[n] + init_def[1] * exp(-time[n]/(hrt[1]*ln2));
+    eta[2] =   asymp[2] + u[id[n],2] + bcoma[2] * tcoma[n] + init_def[2] * exp(-time[n]/(hrt[2]*ln2));
+    iq[n,] ~ multi_normal(eta, Sigma);
  }
 }
 "
@@ -401,8 +385,8 @@ parameters {
 }
 model {
  // matrix[N,2] eta;
- // for(n in 1:N) y[n,] ~ multi_normal(mu + beta * x[n], Sigma);
- y ~ multi_normal(mu + beta .* x, Sigma);
+ for(n in 1:N) y[n,] ~ multi_normal(mu + beta * x[n], Sigma);
+ // does not work: y ~ multi_normal(mu + beta .* x, Sigma);
 }
 '
 

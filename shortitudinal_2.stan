@@ -1,3 +1,9 @@
+
+// Shortitudinal data # 2
+// Accounting for measurement error in 
+// contextual variables derived from a small cluster
+// - with a Gamma prior on the between cluster variance
+
 data {
   int N;
   int J;

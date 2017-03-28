@@ -1,3 +1,8 @@
+
+// Shortitudinal data # 1
+// Accounting for measurement error in 
+// contextual variables derived from a small cluster
+
 data {
   int N;
   int J;

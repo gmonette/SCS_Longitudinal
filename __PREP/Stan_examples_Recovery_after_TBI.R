@@ -12,21 +12,47 @@
 #' ---
 #' 
 #+ knitr_setup, include=FALSE
-knitr::opts_knit$set()
-knitr::opts_chunk$get(cache = TRUE, eval = FALSE)
+knitr::opts_chunk$set(comment = '')
 #'
+#' ## Stan for Asymptotic Recovery Curves
 #' 
+#' We can use non-linear mixed effects models for normally
+#' distributed responses to estimate asymptotic recovery
+#' curves for VIQ and PIQ separately. It's feasible
+#' to extend these models to handle VIQ and PIQ as a 
+#' multivariate response, but doing so is not straighforward.
 #' 
+#' Here, we use Stan to build a model for a multivariate
+#' response which will allow us to  compare the  parameters
+#' for the two models in a way that exploits the covariance
+#' between the responses.
+#' 
+#' We start with univariate models which we then combine
+#' into a multivariate model.
+#' 
+#+ include=FALSE
+# note that include=FALSE will evaluate but not show code
+interactive <- FALSE  # do not run interactive code
+knitr::opts_chunk$set(comment='')
+if(.Platform$OS.type == 'windows') windowsFonts(Arial=windowsFont("TT Arial")) 
+#+ include=FALSE, eval=FALSE
+# we don't want to evaluate this when running the code for Markdown
+interactive <- TRUE  # run this when running code by hand
+#'
+#' Loading packages:
+#' 
+#+ packages
+library(spida2)
+library(magrittr, pos = 1000) 
+library(lattice)
+library(latticeExtra)
+
 library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
-# windowsFonts(Arial=windowsFont("TT Arial")) 
-interactive <- FALSE
-library(spida2)
-library(magrittr, pos = 1000) # so it won't mask 'extract' in rstan
-library(car)
-library(lattice)
-library(latticeExtra)
+#'
+#' ## Explore data
+#'
 
 data(iq)
 ?iq
@@ -47,14 +73,12 @@ if(interactive) {
   rows
   save(rows, file = 'rows.rda')
 }
+
 load('rows.rda', verbose = T)
-iq[rows,] %>% sortdf(~dcoma+dayspc)
+dd[rows,] %>% sortdf(~dcoma+dayspc)
 # id = 2600 retested 4 days apart
-# Create a long file wrt iq
-dd$iq__verbal <- dd$viq
-dd$iq__perf <- dd$piq
-dl <- tolong(dd, sep = "__", idvar = 'row', timevar = 'test')
-head(dl)
+dd[dd$id %in% dd[rows,'id'],]  %>%  sortdf(~dcoma+dayspc)
+
 if(interactive){
   library(p3d)
   Init3d()
@@ -71,326 +95,200 @@ if(interactive){
   fg()
   Id3d()
 }
-
-# Stan program:
-cat(file="asymp_model.stan")
-
+#'
+#' ## Stan program
+#'
+stanfile <- 'asymp_model_1.stan' 
+pr <- function(x) print(readLines(x), quote = FALSE) # write a function for repetitive tasks
+pr(stanfile)
 system.time(
-asymp_model_dso <- stan_model("asymp_model.stan")
+  asymp_model_dso <- stan_model(stanfile)
 )
-
-# Prepare data
-
+#'
+#' ### Prepare data list
+#'
 names(dd)
+pred <- expand.grid(time=seq(0, 3*365, 30), 
+                    coma = seq(0,30,5))
 dat <- list(
   N = nrow(dd),
   id = nid <- as.numeric(as.factor(dd$id)),
   J = max(nid),
   y = dd$piq,
+  time = dd$dayspc,
+  coma = sqrt(dd$dcoma),
+  Np = nrow(pred),
+  time_p = pred$time,
+  coma_p = sqrt(pred$coma)
+)
+set.seed(789723)
+mod <- sampling(asymp_model_dso, dat, chains = 4, iter = 2000)
+# Note: chains and iter are defaults
+traceplot(mod)
+names(mod)
+pars <- grepv('^u|y_p', names(mod), invert = T)
+pars
+traceplot(mod, pars = pars)
+pairs(mod, pars = pars)
+if(interactive) {
+  library(shinystan)
+  mod_sso <- launch_shinystan(mod)
+}
+zd <- as.data.frame(mod, pars = pars)
+head(zd)
+xyplot(hrt~asymp, zd)
+print(mod, pars = pars)
+get_posterior_mean(mod, pars = pars)[,5]
+#'
+#' Note that you can do extensive plotting of 
+#' the posterior sample with 'shinystan' including
+#' some not highly satisfying 3d plots.
+#'
+#' ## Random initial deficit
+#'
+#' It wasn't feasible to fit a model that included
+#' random initial deficits using 'lme' so this
+#' will be an interesting experiment.
+#'  
+#' Note that the data will be identical.
+#'
+#'
+stanfile <- 'asymp_model_2.stan' 
+pr(stanfile)
+system.time(
+  asymp_model_2_dso <- stan_model(stanfile)
+)
+#'
+#' Fitting the model. The data is the same.
+#' 
+mod2 <- sampling(asymp_model_2_dso, dat, chains = 4, iter = 2000)
+
+pars <- grepv('^u|y_p', names(mod2), invert = T)
+pars
+traceplot(mod2, pars = pars)
+pairs(mod2, pars = pars)
+#'
+#'
+#' ### Poor convergence: possible remedies
+#' 
+#' The variability in the sd of initial deficit is
+#' poorly estimated.
+#' 
+#' We can try to improve this in a least two ways:
+#' 
+#' 1.  Reparametrize the model: Taking the initial point
+#'     at time 0 puts it outside the range of the data.
+#'     Using a later time as time 0 could improve the 
+#'     estimate.  This can be done just by changing the
+#'     data and subtracting a constant from time. We then 
+#'     need to remember the changed interpretation of 
+#'     parameters although most parameters are not
+#'     affected, e.g. 'asymp' and 'hrt'
+#' 2.  Use an informative prior for 'sigma_idef'. So far
+#'     all models have used flat priors for hyper-parameters.
+#'     Gelman would not hesitate to use much more informative
+#'     priors.
+#'     
+#' We'll try step 1 because it's easy. We'll subtract 180 
+#' from time so that time 0 will be relocated to approximately
+#' 6 months.
+#' 
+#' #### Reparametrize
+#' 
+dat_6 <- list(
+  N = nrow(dd),
+  id = nid <- as.numeric(as.factor(dd$id)),
+  J = max(nid),
+  y = dd$piq,
+  time = dd$dayspc - 180,
+  coma = sqrt(dd$dcoma),
+  Np = nrow(pred),
+  time_p = pred$time - 180,
+  coma_p = sqrt(pred$coma)
+)
+
+mod2_6 <- sampling(asymp_model_2_dso, dat_6, chains = 4, iter = 2000)
+
+pars <- grepv('^u|y_p', names(mod2_6), invert = T)
+pars
+traceplot(mod2_6, pars = pars)
+pairs(mod2_6, pars = pars)
+#'
+#' #### Informative prior
+#'
+#' We will try a Gamma prior on 'sigma_idef'
+#'
+stanfile <- 'asymp_model_3.stan' 
+pr(stanfile)
+system.time(
+  asymp_model_3_dso <- stan_model(stanfile)
+)
+#'
+#' Fitting the model. The data is the same plus the
+#' two parameters for the gamma prior.
+#' 
+mod3_6 <- sampling(asymp_model_3_dso, 
+                 c(dat_6, gamma_df = 4, gamma_scale = .5), 
+                 chains = 4, iter = 2000,
+                 init = list(
+                   list(sigma_idef=1,init_def_mean = -10, asymp = 100),
+                   list(sigma_idef=1,init_def_mean = -10, asymp = 100),
+                   list(sigma_idef=1,init_def_mean = -10, asymp = 100),
+                   list(sigma_idef=1,init_def_mean = -10, asymp = 100)
+                 ),
+                 control = list(adapt_delta = 0.85))
+
+pars <- grepv('^u|y_p', names(mod3_6), invert = T)
+pars
+traceplot(mod3_6, pars = pars)
+pairs(mod3_6, pars = pars)
+print(mod3_6, pars = pars)
+get_posterior_mean(mod3_6, pars = pars)[,5] %>% cbind
+get_posterior_mean(mod2_6, pars = pars)[,5] %>% cbind
+get_posterior_mean(mod2, pars = pars)[,5] %>% cbind
+
+#'
+#' ## Multivariate model for VIQ and PIQ
+#'
+#' Instead of simple standard deviations for each VIQ and PIQ, we need
+#' covariance matrices to describe the within- and the between-subject
+#' covariance between VIQ and PIQ.
+#' 
+#' The first model uses a uniform prior on covariance matrices using
+#' constraints generated by Stan on covariance matrices.  
+#' 
+#' It is more efficient to use a combination of an LKJ prior on correlation
+#' together with priors of variances. The second model below use this
+#' form of parametrization.
+#' 
+
+stanfile <- 'asymp_model_4.stan' 
+pr(stanfile)
+system.time(
+  asymp_model_4_dso <- stan_model(stanfile)
+)
+#'
+#' ### Data for multivariate model
+#'
+#'
+
+dat <- list(
+  N = nrow(dd),
+  id = nid <- as.numeric(as.factor(dd$id)),
+  J = max(nid),
+  iq = cbind(dd$viq,dd$piq),
   time = dd$dayspc,
   coma = sqrt(dd$dcoma)
 )
 
-mod <- sampling(asymp_model_dso, dat, chains = 4, iter = 2000, 
-                seed = 789723)
-# Note: chains and iter are defaults
-traceplot(mod)
-library(shinystan)
-names(mod)
-pars <- grepv('^u', names(mod), invert = T)
-pars
-traceplot(mod, pars = pars)
-pairs(mod, pars = pars)
-
-mod_sso <- launch_shinystan(mod)
-
-if(FALSE) {
-  # can do most of this in shiny:
-  mod_df <- as.data.frame(extract(mod, permuted = F, pars = pars))
-  head(mod_df)
-  dim(mod_df)
-  names(mod_df)
-  mod_dl <- tolong(mod_df, sep = '.', reverse = T, timevar = 'chain')
-  head(mod_dl)
-  library(p3d)
-  Init3d()
-  Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl)
-  Axes3d()
-  Plot3d(lp__ ~ sigma + sigma_u | chain, mod_dl, groups = chain)
-  tab(mod_dl, ~ time)
-  Plot3d(hrt ~ asymp + init_def | chain, mod_dl)
-  Axes3d()
-}
-#'
-#'  
-#'  Test square root for dcoma
-#'
-asymp_model_coma_pow <- "
-data {
-int N;
-int J;
-vector[N] y;
-vector[N] time;
-vector[N] coma;
-int id[N];
-}
-transformed data{
-vector[N] logcoma;
-real ln2;
-logcoma = log(coma);
-ln2 = log(2);
-}
-parameters {
-real hrt;
-
-real asymp;
-real bcoma;
-real <lower=0.1,upper=2> power; 
-real init_def;
-real <lower=0> sigma;
-real <lower=0> sigma_u;
-vector[J] u;
-}
-model {
-u ~ normal(0,sigma_u);
-y ~ normal(asymp + u[id] + bcoma * exp(power*logcoma) + init_def * exp(-time/(hrt*ln2)), sigma);
-}
-"
-
-system.time(
-  asymp_model_coma_pow_dso <- stan_model(model_code = asymp_model_coma_pow,
-                                model_name = 'asymptotic model: power on coma')
-)
-
-names(dd)
-dat <- list(
-  N = nrow(dd),
-  id = nid <- as.numeric(as.factor(dd$id)),
-  J = max(nid),
-  y = dd$piq,
-  time = dd$dayspc,
-  coma = sqrt(dd$dcoma+1)
-)
-
-mod_coma_pow <- sampling(asymp_model_coma_pow_dso, dat, chains = 4, iter = 2000, seed = 789723)
-
-pars <- grepv('^u', names(mod_coma_pow), invert = T)
-traceplot(mod_coma_pow, pars = pars)
-pairs(mod_coma_pow, pars = pars)
-
-#'
-#'
-#'  Let's try a different parametrization from the Box-Cox tranform
-#'  
-#'  
-#'
-
-
-
-
-library(shinystan)
-names(mod)
-pars
-traceplot(mod, pars = pars)
-pairs(mod, pars = pars)
-mod_sso <- launch_shinystan(mod)
-
-#'
-#'
-#' Maybe some chains start in the wilderness and never find
-#' their way to the mountain because the posterior is too flat
-#' 
-#' Note 
-#' 1. the lp peak for values of dcoma close to 0
-#' 2. asymp and init_def and hrt seem highly related 
-#'
-#' Let's try plausible initial values 
-#'
-names(mod)
-inits <- rep(0, length(names(mod)))
-names(inits) <- names(mod)
-inits[c('sigma','sigma_u')] <- c(15,5)
-inits['hrt'] <-  360
-inits['asymp'] <- 100
-inits['init_def'] <- -20
-inits <- inits[-grep("^lp__$", names(inits))]    # removing 'lp__' which isn't a parameter
-inits <- lapply(1:6,function(x) as.list(inits))
-str(inits)
-system.time(
-mod2 <- sampling(asymp_model_dso, dat, chains = 6, iter = 2000, seed = 789723,
-                init = inits)
-)
-
-traceplot(mod2, pars = pars)
-pairs(mod2, pars = pars)
-
-#'
-#' Using initial values only helped a bit. 
-#'
-#' There's very high collinearity between b_asymp and b_init_def which
-#' might be related to b_hrt: Show absolute collinearity between init_def and asymp
-#' 
-#' We are spending a lot of time in the tails of dist
-#' 
-#' Try 3 things:
-#' 
-#' 1. put origin at 1 year so it's in the data and reduce collinearity between 
-#'    init_def and asymp
-#' 2. change dayspc to monthspc
-#' 3. use informative priors
-#'  
-
-
-asymp_model_2 <- "
-data {
-  int N;
-  int J;
-  vector[N] y;
-  vector[N] time;
-  vector[N] coma;
-  int id[N];
-}
-transformed data{
-  real ln2;
-  ln2 = log(2);
-}
-parameters {
-  real hrt;
-  real asymp;
-  real bcoma;
-  real init_def;
-  vector[J] u;
-  real <lower=0> sigma;
-  real <lower=0> sigma_u;
-}
-model {
-  u ~ normal(0,sigma_u);
-  y ~ normal(asymp +uuuuu bcoma * coma + init_def * exp(-time/(hrt*ln2)), sigma);
-}
-"
-
-
-
-mod2_sso <- launch_shinystan(mod2) # have a look at three variables
-
-
-
-asymp_model <- "
-data {
-  int N;
-  int J;
-  vector[N] y;
-  vector[N] time;
-  vector[N] coma;
-  int id[N];
-}
-transformed data{
-  real ln2;
-  ln2 = log(2);
-}
-parameters {
-  real <lower=1,upper=10000> hrt;
-  real <lower=0,upper=200> asymp;
-  // real <lower=-100,upper=100> bcoma;
-  real <lower-100,upper=100> init_def;
-  vector[J] u;
-  real <lower=0,upper=sigma;
-  real sigma_u;
-}
-model {
-  u ~ normal(0,sigma_u);
-  y ~ normal(asymp +uuuuu init_def* exp(-time/(hrt*ln2)), sigma);
-}
-"
-
-
-## viq and piq ------------------------------------------------------------------
-
-mult_model <- "
-data {
-  int N;
-  int J;
-  matrix[N,2] iq;
-  vector[N] time;
-  vector[N] tcoma;
-  int id[N];
-  }
-transformed data{
-  real ln2;
-  vector[2] zero;
-  ln2 = log(2);
-  for ( i in 1:2) zero[i] = 0.0;
-}
-parameters {
-  vector <lower=1,upper=10000>[2] hrt;
-  vector <lower=0,upper=200>[2] asymp;
-  vector <lower=-100,upper=100>[2] init_def;
-  vector [2] bcoma;
-  vector[2] u[J];
-  cov_matrix[2] Sigma;
-  cov_matrix[2] Sigma_u;
-}
-model {
- vector[2] eta;
- for(j in 1:J) u[j] ~ multi_normal(zero, Sigma_u);
- for(n in 1:N) {
-    eta[1] =   asymp[1] + u[id[n],1] + bcoma[1] * tcoma[n] + init_def[1] * exp(-time[n]/(hrt[1]*ln2));
-    eta[2] =   asymp[2] + u[id[n],2] + bcoma[2] * tcoma[n] + init_def[2] * exp(-time[n]/(hrt[2]*ln2));
-    iq[n,] ~ multi_normal(eta, Sigma);
- }
-}
-"
-
-mult_dso <- stan_model(model_code = mult_model)
-
-
-names(dd)
-dat <- list(
-  N = nrow(dd),
-  id = nid <- as.numeric(as.factor(dd$id)),
-  J = max(nid),
-  iq = cbind(dd$piq,dd$viq),
-  time = dd$dayspc,
-  tcoma = sqrt(dd$dcoma)
-)
-
-mult_mod <- sampling( mult_dso, dat)
-
-# some numerical problems with covariances
+mult_mod <- sampling( asymp_model_4_dso, dat)
 
 pars <- grepv('^u' ,names(mult_mod), invert = T)
-print(mult_mod, pars = pars)
 traceplot(mult_mod, pars = pars)
 pairs(mult_mod, pars = pars)
+print(mult_mod, pars = pars)
 
-## multivariate experiment ---------------------------
+#'
+#' ## Using a Cholesky parametrization
+#'
 
-zd <- data.frame( x = rnorm(100))
-zd$y1 <- 3*zd$x + rnorm(100)
-zd$y2 <- zd$y1 -2 *zd$x + rnorm(100)
-zd <- with(zd, list(N = 100, x = x, y = cbind(y1,y2)))
-
-
-
-zmod <- '
-data{
-  int N;
-  vector[N] x;
-  matrix[N,2] y;
-}
-parameters {
- vector[2] mu;
- vector[2] beta;
- cov_matrix[2] Sigma;
-}
-model {
- // matrix[N,2] eta;
- for(n in 1:N) y[n,] ~ multi_normal(mu + beta * x[n], Sigma);
- // does not work: y ~ multi_normal(mu + beta .* x, Sigma);
-}
-'
-
-zdso <- stan_model(model_code = zmod)
-zsam <- sampling(zdso, zd)
-traceplot(zsam)
-pairs(zsam)

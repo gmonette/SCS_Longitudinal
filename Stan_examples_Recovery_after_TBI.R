@@ -124,9 +124,9 @@ dat <- list(
 set.seed(789723)
 mod <- sampling(asymp_model_dso, dat, chains = 4, iter = 2000)
 # Note: chains and iter are defaults
-traceplot(mod)
+# traceplot(mod)
 names(mod)
-pars <- grepv('^u|y_p', names(mod), invert = T)
+pars <- grepv('^u|y_fit', names(mod), invert = T)
 pars
 traceplot(mod, pars = pars)
 pairs(mod, pars = pars)
@@ -136,6 +136,7 @@ if(interactive) {
 }
 zd <- as.data.frame(mod, pars = pars)
 head(zd)
+#+
 xyplot(hrt~asymp, zd)
 print(mod, pars = pars)
 get_posterior_mean(mod, pars = pars)[,5]
@@ -163,7 +164,7 @@ system.time(
 #' 
 mod2 <- sampling(asymp_model_2_dso, dat, chains = 4, iter = 2000)
 
-pars <- grepv('^u|y_p', names(mod2), invert = T)
+pars <- grepv('^u|y_fit', names(mod2), invert = T)
 pars
 traceplot(mod2, pars = pars)
 pairs(mod2, pars = pars)
@@ -209,7 +210,7 @@ dat_6 <- list(
 
 mod2_6 <- sampling(asymp_model_2_dso, dat_6, chains = 4, iter = 2000)
 
-pars <- grepv('^u|y_p', names(mod2_6), invert = T)
+pars <- grepv('^u|y_fit', names(mod2_6), invert = T)
 pars
 traceplot(mod2_6, pars = pars)
 pairs(mod2_6, pars = pars)
@@ -232,7 +233,7 @@ mod3_6 <- sampling(asymp_model_3_dso,
                  chains = 4, iter = 2000,
                  control = list(adapt_delta = 0.85))
 
-pars <- grepv('^u|y_p', names(mod3_6), invert = T)
+pars <- grepv('^u|y_fit', names(mod3_6), invert = T)
 pars
 traceplot(mod3_6, pars = pars)
 pairs(mod3_6, pars = pars)
@@ -278,6 +279,8 @@ get_posterior_mean(mod2, pars = pars)[,5] %>% cbind
 #' our model but we are concerned that it might have an uncertain
 #' impact on our other results, we can resort to a sensitivity analysis.
 #' Try a variety of plausible values and see how it affects other results.
+#' 
+#' We also put a plausible lower bound of 10 on sigma_u.
 #'
 
 stanfile <- 'asymp_model_3c.stan' 
